@@ -1,14 +1,12 @@
 package gelf
 
 import (
-	"encoding/json"
-	"errors"
 	"log"
-	"net"
 	"os"
-	"time"
 	"strings"
+	"time"
 
+	"github.com/Graylog2/go-gelf/gelf"
 	"github.com/gliderlabs/logspout/router"
 )
 
@@ -16,82 +14,81 @@ var hostname string
 
 func init() {
 	hostname, _ = os.Hostname()
-	router.AdapterFactories.Register(NewGelfAdapter, "gelf")
+	router.AdapterFactories.Register(New, "gelf")
 }
 
-// GelfAdapter is an adapter that streams UDP JSON to Graylog
-type GelfAdapter struct {
-	conn  net.Conn
+// Adapter is an adapter that streams UDP JSON to Graylog
+type Adapter struct {
 	route *router.Route
 }
 
-// NewGelfAdapter creates a GelfAdapter with UDP as the default transport.
-func NewGelfAdapter(route *router.Route) (router.LogAdapter, error) {
-	transport, found := router.AdapterTransports.Lookup(route.AdapterTransport("udp"))
-	if !found {
-		return nil, errors.New("unable to find adapter: " + route.Adapter)
-	}
-
-	conn, err := transport.Dial(route.Address, route.Options)
+// New creates a GelfAdapter with UDP as the default transport.
+func New(route *router.Route) (router.LogAdapter, error) {
+	// test the address, but don't use this writer
+	writer, err := gelf.NewWriter(route.Address)
 	if err != nil {
 		return nil, err
 	}
+	writer.Close()
 
-	return &GelfAdapter{
+	return &Adapter{
 		route: route,
-		conn:  conn,
 	}, nil
 }
 
-// Stream implements the router.LogAdapter interface.
-func (a *GelfAdapter) Stream(logstream chan *router.Message) {
-	for m := range logstream {
+func streamSome(writer *gelf.Writer, logstream chan *router.Message, cancel <-chan time.Time) {
+	for {
+		select {
+		case msg := <-logstream:
+			if err := writer.WriteMessage(&gelf.Message{
+				Version:  "1.1",
+				Host:     hostname, // Running as a container cannot discover the Docker Hostname
+				Short:    msg.Data,
+				TimeUnix: float64(msg.Time.UnixNano()/int64(time.Millisecond)) / 1000.0,
+				Level:    gelf.LOG_INFO, // TODO: be smarter about this? stdout vs. stderr are not log levels
+				Extra: map[string]interface{}{
+					"_container_id":   msg.Container.ID,
+					"_container_name": msg.Container.Name,
+					"_image_id":       msg.Container.Image,
+					"_image_name":     msg.Container.Config.Image,
+					"_command":        strings.Join(msg.Container.Config.Cmd, " "),
+					"_created":        msg.Container.Created,
+				},
+			}); err != nil {
+				log.Printf("error sending GELF message: %s", err)
+			}
 
-		msg := GelfMessage{
-			Version:        "1.1",
-      			Host:           hostname, // Running as a container cannot discover the Docker Hostname
-			ShortMessage:   m.Data,
-			Timestamp:      m.Time.Format(time.RFC3339Nano),
-			ContainerId:    m.Container.ID,
-			ContainerName:  m.Container.Name,
-			ContainerCmd:   strings.Join(m.Container.Config.Cmd," "),
-			ImageId:        m.Container.Image,
-			ImageName:      m.Container.Config.Image,
-		}
-
-		if m.Source == "stdout" {
-      			msg.Level = 3
-    		}
-    		
-    		if m.Source == "stderr" {
-    			msg.Level = 6
-		}
-
-		js, err := json.Marshal(msg)
-		if err != nil {
-			log.Println("Graylog:", err)
-			continue
-		}
-		_, err = a.conn.Write(js)
-		if err != nil {
-			log.Println("Graylog:", err)
-			continue
+		case <-cancel:
+			return
 		}
 	}
 }
 
-type GelfMessage struct {
-	Version      string  `json:"version"`
-	Host         string  `json:"host,omitempty"`
-	ShortMessage string  `json:"short_message"`
-	FullMessage  string  `json:"message,omitempty"`
-	Timestamp    string  `json:"timestamp,omitempty"`
-	Level        int     `json:"level,omitempty"`
-
-	ImageId        string `json:"image_id,omitempty"`
-	ImageName      string `json:"image_name,omitempty"`
-	ContainerId    string `json:"container_id,omitempty"`
-	ContainerName  string `json:"container_name,omitempty"`
-	ContainerCmd   string `json:"command,omitempty"`
+func dropSome(logstream chan *router.Message, cancel <-chan time.Time) {
+	for {
+		select {
+		case msg := <-logstream:
+			log.Printf("dropping log message: %s", msg.Data)
+		case <-cancel:
+			return
+		}
+	}
 }
 
+// Stream implements the router.LogAdapter interface.
+func (a *Adapter) Stream(logstream chan *router.Message) {
+	for {
+		writer, err := gelf.NewWriter(a.route.Address)
+		if err != nil {
+			log.Printf("error dialing %s: %s", a.route.Address, err)
+
+			// Try redial after 5 seconds
+			dropSome(logstream, time.After(5*time.Second))
+		} else {
+			log.Printf("dialed %s", a.route.Address)
+
+			// Redial after 1 minute. Maybe DNS changed?
+			streamSome(writer, logstream, time.After(1*time.Minute))
+		}
+	}
+}
