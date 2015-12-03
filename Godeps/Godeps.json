@@ -1,0 +1,19 @@
+{
+	"ImportPath": "github.com/pmahoney/logspout-gelf",
+	"GoVersion": "go1.5.1",
+	"Deps": [
+		{
+			"ImportPath": "github.com/Graylog2/go-gelf/gelf",
+			"Rev": "6c62a85f1d47a67f2a5144c0e745b325889a8120"
+		},
+		{
+			"ImportPath": "github.com/fsouza/go-dockerclient",
+			"Rev": "dc4295a98977ab5b1983051bc169b784c4b423df"
+		},
+		{
+			"ImportPath": "github.com/gliderlabs/logspout/router",
+			"Comment": "v1-76-g99b8b0a",
+			"Rev": "99b8b0a623d39b60460a79f9af69060da83e17bd"
+		}
+	]
+}
