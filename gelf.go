@@ -1,6 +1,7 @@
 package gelf
 
 import (
+	"compress/flate"
 	"log"
 	"os"
 	"strings"
@@ -86,6 +87,9 @@ func (a *Adapter) Stream(logstream chan *router.Message) {
 			dropSome(logstream, time.After(5*time.Second))
 		} else {
 			log.Printf("dialed %s", a.route.Address)
+		// intended to forward logs to a service on localhost
+		writer.CompressionLevel = flate.NoCompression
+
 
 			// Redial after 1 minute. Maybe DNS changed?
 			streamSome(writer, logstream, time.After(1*time.Minute))
