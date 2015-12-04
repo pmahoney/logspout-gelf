@@ -62,7 +62,8 @@ func streamSome(writer *gelf.Writer, logstream chan *router.Message) error {
 }
 
 func drop(msg *router.Message) {
-	log.Printf("gelf: dropping log message: %s", msg.Data)
+	log.Printf("gelf: dropping log message [%.12s %s %s]: %s",
+		msg.Container.ID, msg.Container.Config.Image, msg.Container.Name, msg.Data)
 }
 
 func dropSome(logstream chan *router.Message, cancel <-chan time.Time) {
