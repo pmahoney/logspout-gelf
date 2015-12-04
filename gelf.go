@@ -13,8 +13,19 @@ import (
 
 var hostname string
 
+// Logs from the logstream starting with this prefix will be silently ignored
+// under the assumption they came from this container logging errors sending a
+// previous log, in order to prevent and endless cycle. Such hack. It's also
+// recommended to add to the environment LOGSPOUT=ignore, so this is merely a
+// fallback safety measure, but that isn't an option if logspout's logs are
+// desired.
+var logPrefix = "~--//> gelf: "
+
+var logger *log.Logger
+
 func init() {
 	hostname, _ = os.Hostname()
+	logger = log.New(os.Stderr, logPrefix, 0)
 	router.AdapterFactories.Register(New, "gelf")
 }
 
@@ -37,6 +48,10 @@ func New(route *router.Route) (router.LogAdapter, error) {
 
 func streamSome(writer *gelf.Writer, logstream chan *router.Message) error {
 	for msg := range logstream {
+		if strings.HasPrefix(msg.Data, logPrefix) {
+			continue
+		}
+
 		if err := writer.WriteMessage(&gelf.Message{
 			Version:  "1.1",
 			Host:     hostname, // Running as a container cannot discover the Docker Hostname
@@ -52,7 +67,7 @@ func streamSome(writer *gelf.Writer, logstream chan *router.Message) error {
 				"_created":        msg.Container.Created,
 			},
 		}); err != nil {
-			log.Printf("gelf: error sending message: %s", err)
+			logger.Printf("error sending message: %s", err)
 			drop(msg)
 			return err
 		}
@@ -62,7 +77,7 @@ func streamSome(writer *gelf.Writer, logstream chan *router.Message) error {
 }
 
 func drop(msg *router.Message) {
-	log.Printf("gelf: dropping log message [%.12s %s %s]: %s",
+	logger.Printf("dropping log message [%.12s %s %s]: %s",
 		msg.Container.ID, msg.Container.Config.Image, msg.Container.Name, msg.Data)
 }
 
@@ -83,13 +98,13 @@ func newGoodWriter(address string, logstream chan *router.Message) *gelf.Writer 
 	for {
 		writer, err := gelf.NewWriter(address)
 		if err != nil {
-			log.Printf("gelf: error dialing %s: %s", address, err)
+			logger.Printf("error dialing %s: %s", address, err)
 
 			// Try redial after 5 seconds
 			dropSome(logstream, time.After(5*time.Second))
 		}
 
-		log.Printf("gelf: dialed %s", address)
+		logger.Printf("dialed %s", address)
 
 		// intended to forward logs to a service on localhost
 		writer.CompressionLevel = flate.NoCompression
