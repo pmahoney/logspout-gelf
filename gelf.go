@@ -1,3 +1,6 @@
+// NOTE: run this in a docker container with LOGSPOUT=ignore to avoid log
+// message storm.
+
 package gelf
 
 import (
@@ -13,19 +16,11 @@ import (
 
 var hostname string
 
-// Logs from the logstream starting with this prefix will be silently ignored
-// under the assumption they came from this container logging errors sending a
-// previous log, in order to prevent and endless cycle. Such hack. It's also
-// recommended to add to the environment LOGSPOUT=ignore, so this is merely a
-// fallback safety measure, but that isn't an option if logspout's logs are
-// desired.
-var logPrefix = "~--//> gelf: "
-
 var logger *log.Logger
 
 func init() {
 	hostname, _ = os.Hostname()
-	logger = log.New(os.Stderr, logPrefix, 0)
+	logger = log.New(os.Stderr, "gelf: ", 0)
 	router.AdapterFactories.Register(New, "gelf")
 }
 
@@ -48,10 +43,6 @@ func New(route *router.Route) (router.LogAdapter, error) {
 
 func streamSome(writer *gelf.Writer, logstream chan *router.Message) error {
 	for msg := range logstream {
-		if strings.HasPrefix(msg.Data, logPrefix) {
-			continue
-		}
-
 		if err := writer.WriteMessage(&gelf.Message{
 			Version:  "1.1",
 			Host:     hostname, // Running as a container cannot discover the Docker Hostname
@@ -108,6 +99,7 @@ func newGoodWriter(address string, logstream chan *router.Message) *gelf.Writer 
 
 		// intended to forward logs to a service on localhost
 		writer.CompressionLevel = flate.NoCompression
+		writer.CompressionType = gelf.CompressGzip
 
 		return writer
 	}
