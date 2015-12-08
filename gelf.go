@@ -75,7 +75,10 @@ func drop(msg *router.Message) {
 func dropSome(logstream chan *router.Message, cancel <-chan time.Time) {
 	for {
 		select {
-		case msg := <-logstream:
+		case msg, ok := <-logstream:
+			if !ok {
+				return
+			}
 			drop(msg)
 		case <-cancel:
 			return
