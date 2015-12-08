@@ -131,8 +131,8 @@ func (a *Adapter) Stream(logstream chan *router.Message) {
 		writer := newGoodWriter(a.address, logstream)
 		defer writer.Close()
 
-		// refresh writer every 5 seconds to detect UDP server down
-		return streamSome(writer, logstream, time.After(5*time.Second))
+		// refresh writer every 5 minutes to accomodate DNS changes
+		return streamSome(writer, logstream, time.After(5*time.Minute))
 	}
 
 	// keep streaming, refreshing the writer, until streamSome() returns false
