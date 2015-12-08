@@ -41,30 +41,46 @@ func New(route *router.Route) (router.LogAdapter, error) {
 	return &Adapter{address: route.Address}, nil
 }
 
-func streamSome(writer *gelf.Writer, logstream chan *router.Message) error {
-	for msg := range logstream {
-		if err := writer.WriteMessage(&gelf.Message{
-			Version:  "1.1",
-			Host:     hostname, // Running as a container cannot discover the Docker Hostname
-			Short:    msg.Data,
-			TimeUnix: float64(msg.Time.UnixNano()/int64(time.Millisecond)) / 1000.0,
-			Level:    gelf.LOG_INFO, // TODO: be smarter about this? stdout vs. stderr are not log levels
-			Extra: map[string]interface{}{
-				"_container_id":   msg.Container.ID,
-				"_container_name": msg.Container.Name,
-				"_image_id":       msg.Container.Image,
-				"_image_name":     msg.Container.Config.Image,
-				"_command":        strings.Join(msg.Container.Config.Cmd, " "),
-				"_created":        msg.Container.Created,
-			},
-		}); err != nil {
-			logger.Printf("error sending message: %s", err)
-			drop(msg)
-			return err
-		}
-	}
+// streamSome receives log messages from logstream and writes them to writer.
+// Returns false at the end of the stream. If there is an error writing, or a
+// cancel message is received, returns true to indicate that streaming should be
+// continued with a new writer.
+func streamSome(writer *gelf.Writer, logstream chan *router.Message, cancel <-chan time.Time) bool {
+	for {
+		select {
 
-	return nil
+		case msg, ok := <-logstream:
+			if !ok {
+				return false // end of stream
+			}
+
+			err := writer.WriteMessage(&gelf.Message{
+				Version:  "1.1",
+				Host:     hostname, // Running as a container cannot discover the Docker Hostname
+				Short:    msg.Data,
+				TimeUnix: float64(msg.Time.UnixNano()/int64(time.Millisecond)) / 1000.0,
+				Level:    gelf.LOG_INFO, // TODO: be smarter about this? stdout vs. stderr are not log levels
+				Extra: map[string]interface{}{
+					"_container_id":   msg.Container.ID,
+					"_container_name": msg.Container.Name,
+					"_image_id":       msg.Container.Image,
+					"_image_name":     msg.Container.Config.Image,
+					"_command":        strings.Join(msg.Container.Config.Cmd, " "),
+					"_created":        msg.Container.Created,
+				},
+			})
+			if err != nil {
+				logger.Printf("error sending message: %s", err)
+				drop(msg)
+				return true // try again with new writer
+			}
+
+		case <-cancel:
+			return true // try again with new writer
+
+		}
+
+	}
 }
 
 func drop(msg *router.Message) {
@@ -111,16 +127,15 @@ func newGoodWriter(address string, logstream chan *router.Message) *gelf.Writer 
 // Stream implements the router.LogAdapter interface. It redials the server if
 // writes ever fail.
 func (a *Adapter) Stream(logstream chan *router.Message) {
-	f := func() error {
+	f := func() bool {
 		writer := newGoodWriter(a.address, logstream)
 		defer writer.Close()
-		return streamSome(writer, logstream)
+
+		// refresh writer every 5 seconds to detect UDP server down
+		return streamSome(writer, logstream, time.After(5*time.Second))
 	}
 
-	for {
-		if err := f(); err != nil {
-			continue // try again with new writer
-		}
-		return // end of stream
+	// keep streaming, refreshing the writer, until streamSome() returns false
+	for f() {
 	}
 }
