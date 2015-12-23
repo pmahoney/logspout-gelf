@@ -58,7 +58,7 @@ func streamSome(writer *gelf.Writer, logstream chan *router.Message, cancel <-ch
 				Version:  "1.1",
 				Host:     hostname, // Running as a container cannot discover the Docker Hostname
 				Short:    msg.Data,
-				TimeUnix: float64(msg.Time.UnixNano()/int64(time.Millisecond)) / 1000.0,
+				TimeUnix: float64(msg.Time.Unix()) + float64(msg.Time.Nanosecond())/float64(1e9),
 				Level:    gelf.LOG_INFO, // TODO: be smarter about this? stdout vs. stderr are not log levels
 				Extra: map[string]interface{}{
 					"_container_id":   msg.Container.ID,
