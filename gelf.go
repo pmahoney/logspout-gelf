@@ -67,6 +67,8 @@ func streamSome(writer *gelf.Writer, logstream chan *router.Message, cancel <-ch
 					"_image_name":     msg.Container.Config.Image,
 					"_command":        strings.Join(msg.Container.Config.Cmd, " "),
 					"_created":        msg.Container.Created,
+					// logstash gelf input seems to truncate the unix timestamp to second resolution
+					"_timestamp_RFC3339Nano": msg.Time.Format(time.RFC3339Nano),
 				},
 			})
 			if err != nil {
